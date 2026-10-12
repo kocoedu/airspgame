@@ -89,11 +89,16 @@
         <p class="font-jua text-lg text-slate-300">'게임 시작' 버튼을 눌러 카메라를 활성화하세요.</p>
       </div>
 
-      <!-- 5-Second Countdown HUD -->
-      <div id="countdown-hud" class="hidden absolute top-4 right-4 bg-slate-900/85 backdrop-blur-md text-white px-4 py-2 rounded-2xl border border-white/20 flex items-center gap-2 shadow-lg">
-        <i class="fa-regular fa-clock text-amber-400 animate-spin"></i>
-        <span class="text-xs font-semibold text-slate-300">다음 인식:</span>
-        <span id="timer-text" class="font-jua text-xl text-amber-400 w-4 text-center">5</span>초
+      <!-- Recognition State & Countdown HUD Banner -->
+      <div id="countdown-hud" class="hidden absolute top-4 inset-x-4 flex items-center justify-between bg-slate-900/85 backdrop-blur-md text-white px-4 py-2.5 rounded-2xl border border-white/20 shadow-lg">
+        <div class="flex items-center gap-2">
+          <span id="hud-dot" class="w-2.5 h-2.5 rounded-full bg-emerald-400 animate-pulse"></span>
+          <span id="hud-phase-text" class="font-jua text-sm sm:text-base text-amber-300">손 모양을 준비하세요!</span>
+        </div>
+        <div class="flex items-center gap-1.5 font-jua">
+          <span id="timer-text" class="text-xl text-amber-400 w-5 text-center">5</span>
+          <span class="text-xs text-slate-300">초 후 인식</span>
+        </div>
       </div>
 
       <!-- Center Scanning Target Overlay -->
@@ -189,6 +194,8 @@
     const countdownHud = document.getElementById('countdown-hud');
     const scanTarget = document.getElementById('scan-target');
     const timerText = document.getElementById('timer-text');
+    const hudPhaseText = document.getElementById('hud-phase-text');
+    const hudDot = document.getElementById('hud-dot');
     const statusText = document.getElementById('status-text');
     const modeToggleBtn = document.getElementById('mode-toggle-btn');
 
@@ -284,6 +291,8 @@
 
       countdownValue = 5;
       timerText.textContent = countdownValue;
+      hudPhaseText.textContent = "다음 인식 대기 중...";
+      hudDot.className = "w-2.5 h-2.5 rounded-full bg-amber-400 animate-pulse";
 
       if (countdownTimer) clearInterval(countdownTimer);
 
@@ -296,6 +305,11 @@
         countdownValue--;
         timerText.textContent = countdownValue;
 
+        if (countdownValue === 1) {
+          hudPhaseText.textContent = "손 모양을 유지하세요!";
+          hudDot.className = "w-2.5 h-2.5 rounded-full bg-rose-400 animate-ping";
+        }
+
         if (countdownValue <= 0) {
           clearInterval(countdownTimer);
           processGameTurn();
@@ -307,7 +321,10 @@
     async function processGameTurn() {
       if (!isGameRunning) return;
 
-      updateStatus('🔍 AI 분석 중...');
+      hudPhaseText.textContent = "📸 손 모양 인식 중...";
+      hudDot.className = "w-2.5 h-2.5 rounded-full bg-indigo-400 animate-spin";
+      updateStatus('🔍 카메라 화면 캡처 및 AI 인식 진행 중...');
+      
       const imageBase64 = captureCroppedFrame();
 
       let detectedMove = 'unknown';
@@ -318,11 +335,13 @@
         const moves = ['rock', 'paper', 'scissors', 'rock', 'paper', 'scissors'];
         detectedMove = moves[Math.floor(Math.random() * moves.length)];
         confidenceScore = Math.random() * 0.25 + 0.72; // 72% ~ 97%
+        
+        // Brief pause to simulate network scan
+        await new Promise(r => setTimeout(r, 600));
         evaluateRound(detectedMove, confidenceScore);
       } else {
         // Production Vercel API Call with Safely Formatted URL
         try {
-          // Construct absolute URL safely to prevent blob URL parsing errors
           let apiUrl = '/api/predict';
           if (window.location.protocol.startsWith('http')) {
             apiUrl = new URL('/api/predict', window.location.origin).href;
@@ -351,11 +370,9 @@
           console.warn('Vercel API connection failed or running in preview mode:', err);
           updateStatus('⚠️ Vercel API 서버에 연결할 수 없어 체험 모드로 자동 전환되었습니다.');
           
-          // Switch to Demo mode automatically on URL / server failure
           useDemoMode = true;
           updateModeUI();
 
-          // Fallback turn processing in Demo Mode
           const moves = ['rock', 'paper', 'scissors'];
           detectedMove = moves[Math.floor(Math.random() * moves.length)];
           confidenceScore = Math.random() * 0.25 + 0.75;
@@ -365,7 +382,10 @@
 
       // Restart countdown for next turn if game is active
       if (isGameRunning) {
-        startCountdown();
+        // Brief result display pause before restarting countdown
+        setTimeout(() => {
+          if (isGameRunning) startCountdown();
+        }, 1200);
       }
     }
 
