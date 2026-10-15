@@ -1,43 +1,89 @@
-// 변경 전: 직접 Roboflow 서버 호출 (API Key 노출 위험)
-// const jsonResult = await fetchWithCORSProxy(payload);
+// Vercel Serverless Function: api/predict.js
+// Roboflow ViT 이미지 분류 모델 연동 서버리스 함수
 
-// 변경 후: Vercel 서버리스 함수 호출 (안전함)
-async function predictHandGesture() {
-    if (!video.videoWidth || isPredicting) return 'rock';
-    isPredicting = true;
+export default async function handler(req, res) {
+    // CORS 설정 및 POST 메서드 확인
+    res.setHeader('Access-Control-Allow-Credentials', true);
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    res.setHeader('Access-Control-Allow-Methods', 'GET,OPTIONS,PATCH,DELETE,POST,PUT');
+    res.setHeader(
+        'Access-Control-Allow-Headers',
+        'X-CSRF-Token, X-Requested-With, Accept, Accept-Version, Content-Length, Content-MD5, Content-Type, Date, X-Api-Version'
+    );
+
+    if (req.method === 'OPTIONS') {
+        res.status(200).end();
+        return;
+    }
+
+    if (req.method !== 'POST') {
+        return res.status(405).json({ error: 'Method Not Allowed' });
+    }
+
+    const apiKey = process.env.ROBOFLOW_API_KEY;
+    const endpointUrl = process.env.ROBOFLOW_ENDPOINT;
+
+    if (!apiKey || !endpointUrl) {
+        return res.status(500).json({ 
+            error: 'Server configuration error: ROBOFLOW_API_KEY or ROBOFLOW_ENDPOINT is missing.' 
+        });
+    }
 
     try {
-        const vw = video.videoWidth || 640;
-        const vh = video.videoHeight || 480;
-        const minDim = Math.min(vw, vh);
+        const { image } = req.body;
+        if (!image) {
+            return res.status(400).json({ error: 'Image data is required.' });
+        }
 
-        canvas.width = 224;
-        canvas.height = 224;
+        // Base64 데이터에서 헤더 접두사 제거 (data:image/jpeg;base64,)
+        const base64Data = image.replace(/^data:image\/\w+;base64,/, '');
 
-        const sx = (vw - minDim) / 2;
-        const sy = (vh - minDim) / 2;
+        // Roboflow Serverless API 엔드포인트 URL 구성 (API 키 중복 방지 처리)
+        let targetUrl = endpointUrl;
+        if (!targetUrl.includes('api_key=')) {
+            const separator = targetUrl.includes('?') ? '&' : '?';
+            targetUrl = `${targetUrl}${separator}api_key=${apiKey}`;
+        }
 
-        ctx.drawImage(video, sx, sy, minDim, minDim, 0, 0, 224, 224);
-        const dataUrl = canvas.toDataURL('image/jpeg', 0.85);
-
-        // Vercel 서버리스 API로 이미지 전송
-        const response = await fetch('/api/predict', {
+        // Roboflow API 호출 (fetch API 활용)
+        const roboflowResponse = await fetch(targetUrl, {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ image: dataUrl })
+            body: base64Data,
+            headers: {
+                'Content-Type': 'application/x-www-form-urlencoded'
+            }
         });
 
-        if (!response.ok) throw new Error('API 예측 실패');
+        if (!roboflowResponse.ok) {
+            const errorText = await roboflowResponse.text();
+            return res.status(roboflowResponse.status).json({ 
+                error: 'Roboflow API error', 
+                details: errorText 
+            });
+        }
 
-        const result = await response.json();
-        isPredicting = false;
-        
-        // 서버에서 파싱된 결과를 받아옴 (rock / paper / scissors)
-        const detected = result.topClass;
-        return GESTURE_KEYS.includes(detected) ? detected : getRandomGesture();
+        const result = await roboflowResponse.json();
 
-    } catch (e) {
-        isPredicting = false;
-        return getRandomGesture();
+        // 응답 파싱: predictions 배열에서 가장 높은 신뢰도를 가진 클래스 추출
+        let topPrediction = null;
+        if (result && result.predictions && result.predictions.length > 0) {
+            // 신뢰도 기준 내림차순 정렬 후 최상위 항목 선택
+            const sortedPredictions = result.predictions.sort((a, b) => b.confidence - a.confidence);
+            topPrediction = sortedPredictions[0];
+        }
+
+        if (!topPrediction) {
+            return res.status(200).json({ className: 'unknown', confidence: 0 });
+        }
+
+        // 결과 반환 (클래스명과 신뢰도)
+        return res.status(200).json({
+            className: topPrediction.class, // 예: rock, paper, scissors
+            confidence: topPrediction.confidence
+        });
+
+    } catch (error) {
+        console.error('Prediction processing error:', error);
+        return res.status(500).json({ error: 'Internal Server Error', message: error.message });
     }
 }
